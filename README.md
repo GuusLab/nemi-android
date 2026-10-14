@@ -29,11 +29,11 @@ dependencyResolutionManagement {
 // app/build.gradle.kts
 dependencies {
     // Both modules:
-    implementation("com.github.GuusLab:nemi-android:0.1.0")
+    implementation("com.github.GuusLab:nemi-android:0.1.1")
 
     // Or pick one (a server only needs nemi-core):
-    // implementation("com.github.GuusLab.nemi-android:nemi-android:0.1.0")
-    // implementation("com.github.GuusLab.nemi-android:nemi-core:0.1.0")
+    // implementation("com.github.GuusLab.nemi-android:nemi-android:0.1.1")
+    // implementation("com.github.GuusLab.nemi-android:nemi-core:0.1.1")
 }
 ```
 

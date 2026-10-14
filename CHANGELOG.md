@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-10-14
+
+### Fixed
+
+- The JitPack build of 0.1.0 failed because Maven Central rate limited the build host (429). Dependencies now resolve through Google's Maven Central mirror first. No code changes: use 0.1.1.
+
 ## [0.1.0] - 2026-10-14
 
 ### Added
@@ -35,4 +41,5 @@ All notable changes to this project are documented here. The format follows
   - `EncryptedTokenStore` backed by an Android Keystore AES-256-GCM key.
   - Jetpack Compose `SignInWithNemiButton` and `rememberSignInWithNemi`.
 
+[0.1.1]: https://github.com/GuusLab/nemi-android/releases/tag/0.1.1
 [0.1.0]: https://github.com/GuusLab/nemi-android/releases/tag/0.1.0
