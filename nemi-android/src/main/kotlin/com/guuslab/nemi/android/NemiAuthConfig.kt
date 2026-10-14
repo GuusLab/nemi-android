@@ -29,6 +29,14 @@ public data class NemiAuthConfig @JvmOverloads constructor(
 /** Per sign in overrides. Leave null to use [NemiAuthConfig.scopes]. */
 public data class NemiSignInRequest @JvmOverloads constructor(
     val scopes: List<String>? = null,
-    /** `consent` always shows the consent screen. */
+    /**
+     * [com.guuslab.nemi.NemiPrompt.CONSENT] always shows the consent screen;
+     * [com.guuslab.nemi.NemiPrompt.NONE] shows nothing and fails with `login_required` or
+     * `consent_required` when a screen would be needed. No other values are accepted.
+     */
     val prompt: String? = null,
-)
+) {
+    init {
+        require(prompt == null || prompt == "consent" || prompt == "none") { "prompt must be \"consent\" or \"none\"" }
+    }
+}

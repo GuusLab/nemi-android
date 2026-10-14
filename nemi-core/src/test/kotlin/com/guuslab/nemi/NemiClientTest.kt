@@ -34,7 +34,7 @@ class NemiClientTest {
     @Test
     fun `me decodes snake_case and sends the bearer token`() = runTest {
         routes.on("GET /api/v1/me") {
-            json("""{"id":"sub1","name":"Ada","username":"ada","email":"a@x.com","email_verified":true,"new_field":1}""")
+            json("""{"id":"sub1","name":"Ada","preferred_username":"ada","email":"a@x.com","email_verified":true,"new_field":1}""")
         }
         val me = nemi.me()
         assertEquals(NemiUser("sub1", "Ada", "ada", null, "a@x.com", true), me)
@@ -264,7 +264,8 @@ class NemiClientTest {
         routes.on("POST /api/v1/docs") { json(doc, 201) }
         routes.on("GET /api/v1/sheets") { json("""{"sheets":[{"id":"s1","title":"Budget","workspace_id":"w1","updated_at":"x"}]}""") }
         val sheet = """{"id":"s1","title":"Budget","workspace_id":"w1","updated_at":"x","rows":100,"cols":26,
-            "cells":{"A1":"Rent","B1":950,"C1":true,"D1":null}}"""
+            "cells":{"A1":{"value":"Rent","display":"Rent"},"B1":{"value":950,"display":"\u20ac 950.00"},
+            "C1":{"value":true,"display":"TRUE"},"D1":{"value":null,"display":""},"E1":7}}"""
         routes.on("GET /api/v1/sheets/s1") { json(sheet) }
         routes.on("POST /api/v1/sheets") { json(sheet, 201) }
         routes.on("PATCH /api/v1/sheets/s1/cells") { json("""{"id":"s1","updated":3}""") }
@@ -279,7 +280,9 @@ class NemiClientTest {
         assertEquals("Budget", nemi.sheets.list().single().title)
         val full = nemi.sheets.get("s1")
         assertEquals(26, full.cols)
-        assertEquals(JsonPrimitive(950), full.cells["B1"])
+        assertEquals(NemiCell(JsonPrimitive(950), "\u20ac 950.00"), full.cells["B1"])
+        assertEquals(kotlinx.serialization.json.JsonNull, full.cells["D1"]!!.value)
+        assertEquals(NemiCell(JsonPrimitive(7), null), full.cells["E1"])
         assertEquals(100, nemi.sheets.create("Budget", cells = mapOf("A1" to "Rent")).rows)
         assertEquals(NemiCellsUpdate("s1", 3), nemi.sheets.updateCells("s1", mapOf("A2" to "Food", "B2" to 300, "C2" to null)))
 
@@ -299,20 +302,38 @@ class NemiClientTest {
         routes.on("GET /api/v1/forms/f1/responses") { json("""{"form_id":"f1","total":42,"responses":[{"id":"r1"}]}""") }
         routes.on("GET /api/v1/canvas") { json("""{"canvases":[{"id":"c1","title":"Board","workspace_id":"w1","updated_at":"x"}]}""") }
         routes.on("GET /api/v1/canvas/c1") { json("""{"id":"c1","title":"Board","elements":[],"strokes":[]}""") }
+        routes.on("POST /api/v1/canvas") { json("""{"id":"c2","title":"Ideas","workspace_id":"w1","updated_at":"x"}""", 201) }
+        routes.on("PATCH /api/v1/canvas/c1") { json("""{"id":"c1","title":"Board","elements":[{"type":"note"}]}""") }
+        routes.on("DELETE /api/v1/canvas/c1") { MockResponse().setResponseCode(204) }
 
         assertEquals(true, nemi.forms.list().single().published)
         val form = nemi.forms.get("f1")
         assertEquals(1, (form.raw["items"] as kotlinx.serialization.json.JsonArray).size)
-        assertEquals("f2", nemi.forms.create("Poll", description = "Pick one").raw["id"]!!.jsonPrimitive.content)
+        val questions = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.buildJsonObject { put("type", JsonPrimitive("text")) })
+        }
+        assertEquals("f2", nemi.forms.create("Poll", description = "Pick one", fields = questions).raw["id"]!!.jsonPrimitive.content)
         val responses = nemi.forms.responses("f1", limit = 1, offset = 10)
         assertEquals(42, responses.total)
         assertEquals("r1", responses.responses.single()["id"]!!.jsonPrimitive.content)
         assertEquals("Board", nemi.canvas.list().single().title)
         assertTrue("strokes" in nemi.canvas.get("c1", strokes = true).raw)
+        assertEquals("c2", nemi.canvas.create(title = "Ideas").id)
+        val elements = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.buildJsonObject { put("type", JsonPrimitive("note")) })
+        }
+        assertEquals(1, (nemi.canvas.update("c1", elements = elements).raw["elements"] as kotlinx.serialization.json.JsonArray).size)
+        nemi.canvas.delete("c1")
 
+        assertEquals(
+            """{"title":"Poll","description":"Pick one","fields":[{"type":"text"}]}""",
+            server.takeRequestFor("POST /api/v1/forms").body.readUtf8(),
+        )
         val responsesUrl = server.takeRequestFor("GET /api/v1/forms/f1/responses").requestUrl!!
         assertEquals("10", responsesUrl.queryParameter("offset"))
         assertEquals("true", server.takeRequestFor("GET /api/v1/canvas/c1").requestUrl!!.queryParameter("strokes"))
+        assertEquals("""{"title":"Ideas"}""", server.takeRequestFor("POST /api/v1/canvas").body.readUtf8())
+        assertEquals("""{"elements":[{"type":"note"}]}""", server.takeRequestFor("PATCH /api/v1/canvas/c1").body.readUtf8())
     }
 
     @Test

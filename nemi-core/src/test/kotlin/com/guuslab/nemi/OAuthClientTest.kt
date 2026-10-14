@@ -69,6 +69,17 @@ class OAuthClientTest {
     }
 
     @Test
+    fun `only consent and none are accepted as prompt`() {
+        val none = oauth.createAuthorizationRequest(prompt = NemiPrompt.NONE)
+        assertEquals("none", none.url.toHttpUrl().queryParameter("prompt"))
+        assertFailsWith<IllegalArgumentException> { oauth.createAuthorizationRequest(prompt = "login") }
+        assertEquals(
+            NemiOAuthException.CONSENT_REQUIRED,
+            assertFailsWith<NemiOAuthException> { oauth.parseCallback("$REDIRECT?error=consent_required&state=s1", "s1") }.error,
+        )
+    }
+
+    @Test
     fun `no nonce without openid and request survives json`() {
         val request = oauth.createAuthorizationRequest(listOf("files.read"))
         assertNull(request.nonce)

@@ -1,21 +1,34 @@
 package com.guuslab.nemi
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNames
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 
 // Times are ISO 8601 UTC strings, exactly as the API sends them. Parse them with
 // java.time (API 26+, or core library desugaring) or kotlinx-datetime if you need to.
 
-/** `GET /me`. [id] is the pairwise subject. */
+/** `GET /me`. [id] is the pairwise subject. The other fields depend on the granted scopes. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 public data class NemiUser(
     @SerialName("id") val id: String,
     @SerialName("name") val name: String? = null,
-    @SerialName("username") val username: String? = null,
+    @SerialName("preferred_username") @JsonNames("username") val preferredUsername: String? = null,
     @SerialName("picture") val picture: String? = null,
     @SerialName("email") val email: String? = null,
     @SerialName("email_verified") val emailVerified: Boolean? = null,
@@ -138,8 +151,44 @@ public data class NemiDoc(
 )
 
 /**
- * A sheet (its first tab). [cells] maps A1 references to JSON values (string, number,
- * boolean or null). Lists return summaries without [rows], [cols] and [cells].
+ * One cell as the API returns it: the stored [value] (string, number, boolean or null)
+ * and the [display] text as Nemi shows it (formatted numbers, formula results).
+ */
+@Serializable(with = NemiCellSerializer::class)
+public data class NemiCell(
+    val value: JsonElement = JsonNull,
+    val display: String? = null,
+)
+
+/** Reads `{ "value": ..., "display": "..." }`, and also a bare value for robustness. */
+internal object NemiCellSerializer : KSerializer<NemiCell> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): NemiCell {
+        val element = (decoder as JsonDecoder).decodeJsonElement()
+        return if (element is JsonObject && ("value" in element || "display" in element)) {
+            NemiCell(
+                value = element["value"] ?: JsonNull,
+                display = (element["display"] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull,
+            )
+        } else {
+            NemiCell(element, null)
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: NemiCell) {
+        (encoder as JsonEncoder).encodeJsonElement(
+            buildJsonObject {
+                put("value", value.value)
+                if (value.display != null) put("display", JsonPrimitive(value.display))
+            },
+        )
+    }
+}
+
+/**
+ * A sheet (its first tab). [cells] maps A1 references to cells. Lists return summaries
+ * without [rows], [cols] and [cells]. Writes take plain values, see `SheetsApi.updateCells`.
  */
 @Serializable
 public data class NemiSheet(
@@ -149,7 +198,7 @@ public data class NemiSheet(
     @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("rows") val rows: Int = 0,
     @SerialName("cols") val cols: Int = 0,
-    @SerialName("cells") val cells: Map<String, JsonElement> = emptyMap(),
+    @SerialName("cells") val cells: Map<String, NemiCell> = emptyMap(),
 )
 
 /** Answer of `PATCH /sheets/{id}/cells`. */
@@ -181,7 +230,10 @@ public data class NemiFormResponses(
     @SerialName("responses") val responses: List<JsonObject> = emptyList(),
 )
 
-/** A canvas board. `canvas.get` fills [raw] with the whole board (elements, strokes and so on). */
+/**
+ * A canvas board. `canvas.get` and `canvas.update` fill [raw] with the whole board
+ * (elements, strokes and so on); lists and `canvas.create` return the summary.
+ */
 @Serializable
 public data class NemiCanvas(
     @SerialName("id") val id: String,
@@ -329,7 +381,19 @@ internal data class CreateFormBody(
     @SerialName("workspace_id") val workspaceId: String?,
     @SerialName("title") val title: String,
     @SerialName("description") val description: String?,
-    @SerialName("items") val items: JsonArray?,
+    @SerialName("fields") val fields: JsonArray?,
+)
+
+@Serializable
+internal data class CreateCanvasBody(
+    @SerialName("workspace_id") val workspaceId: String?,
+    @SerialName("title") val title: String?,
+)
+
+@Serializable
+internal data class UpdateCanvasBody(
+    @SerialName("title") val title: String?,
+    @SerialName("elements") val elements: JsonArray?,
 )
 
 @Serializable

@@ -19,6 +19,10 @@ public class NemiOAuthException(
 ) : NemiException(if (errorDescription != null) "$error: $errorDescription" else error, cause) {
     public companion object {
         public const val ACCESS_DENIED: String = "access_denied"
+        /** `prompt=none` and the person is not signed in to Nemi. */
+        public const val LOGIN_REQUIRED: String = "login_required"
+        /** `prompt=none` and the person has not agreed to these scopes yet. */
+        public const val CONSENT_REQUIRED: String = "consent_required"
         public const val INVALID_GRANT: String = "invalid_grant"
         public const val INVALID_SCOPE: String = "invalid_scope"
         public const val INVALID_CLIENT: String = "invalid_client"

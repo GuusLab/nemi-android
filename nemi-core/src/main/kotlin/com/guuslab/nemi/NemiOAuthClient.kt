@@ -55,6 +55,7 @@ public class NemiOAuthClient(
         extraParameters: Map<String, String> = emptyMap(),
     ): String {
         require(scopes.isNotEmpty()) { "Ask for at least one scope" }
+        require(prompt == null || prompt in NemiPrompt.ALL) { "prompt must be NemiPrompt.CONSENT or NemiPrompt.NONE" }
         val builder = endpoints.authorization.toHttpUrl().newBuilder()
             .addQueryParameter("response_type", "code")
             .addQueryParameter("client_id", clientId)

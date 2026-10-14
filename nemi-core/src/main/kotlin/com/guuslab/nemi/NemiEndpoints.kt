@@ -66,3 +66,17 @@ public object NemiScope {
     @JvmField
     public val SIGN_IN: List<String> = listOf(OPENID, PROFILE, EMAIL, OFFLINE_ACCESS)
 }
+
+/** The `prompt` values Nemi supports on `/oauth/authorize`. */
+public object NemiPrompt {
+    /** Always show the consent screen, even when every scope was granted before. */
+    public const val CONSENT: String = "consent"
+
+    /**
+     * Never show a screen. Fails with `login_required` or `consent_required` on the redirect
+     * when the person would have to sign in or agree first. Useful for silent checks.
+     */
+    public const val NONE: String = "none"
+
+    internal val ALL: Set<String> = setOf(CONSENT, NONE)
+}

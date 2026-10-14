@@ -18,7 +18,11 @@ All notable changes to this project are documented here. The format follows
     (list, search, get, download, three step upload with the presigned headers, update,
     delete), `folders.create`, `gallery` (paging `Flow`, photo, multipart upload, albums,
     favourites), `docs` (replace or append), `sheets`, `forms` (paged responses),
-    `canvas` and `calendar` (calendars and events, with an optional calendar on create).
+    `canvas` (read, create, update, delete) and `calendar` (calendars and events, with an
+    optional calendar on create).
+  - `NemiUser.preferredUsername` from `preferred_username`; sheet cells as
+    `NemiCell(value, display)`; `forms.create` sends `fields`.
+  - `NemiPrompt.CONSENT` and `NemiPrompt.NONE`, the only `prompt` values Nemi accepts.
   - Models match the v1 response shapes, including list wrappers, photo color and albums,
     album covers and 204 deletes.
   - Typed errors `NemiApiException` (status, code, requiredScope) and `NemiOAuthException`.

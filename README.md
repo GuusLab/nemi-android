@@ -115,8 +115,15 @@ TalkBack as a button labelled "Sign in with Nemi".
 Pass a `NemiSignInRequest` to ask for more scopes later or to force the consent screen:
 
 ```kotlin
-signIn(NemiSignInRequest(scopes = NemiScope.SIGN_IN + NemiScope.FILES_READ, prompt = "consent"))
+signIn(NemiSignInRequest(scopes = NemiScope.SIGN_IN + NemiScope.FILES_READ, prompt = NemiPrompt.CONSENT))
 ```
+
+Nemi supports two `prompt` values and refuses any other:
+
+- `NemiPrompt.CONSENT`: always show the consent screen.
+- `NemiPrompt.NONE`: show nothing. When the person would have to sign in or agree first,
+  the result is `Failed` with `NemiOAuthException.error` set to `login_required` or
+  `consent_required`.
 
 ## Views quick start
 
@@ -219,6 +226,12 @@ nemi.docs.update(doc.id, markdown = "\n# Day 2", mode = DocUpdateMode.Append)
 
 val sheet = nemi.sheets.create("Budget", cells = mapOf("A1" to "Rent", "B1" to 950))
 nemi.sheets.updateCells(sheet.id, mapOf("A2" to "Food", "B2" to 300))   // { id, updated }
+val b1 = nemi.sheets.get(sheet.id).cells["B1"]   // NemiCell(value = 950, display = "950")
+
+val board = nemi.canvas.create(title = "Ideas")
+val current = nemi.canvas.get(board.id).raw["elements"]?.jsonArray ?: JsonArray(emptyList())
+// elements REPLACES the whole board: send back the full array.
+nemi.canvas.update(board.id, elements = JsonArray(current + buildJsonObject { put("type", "note") }))
 
 val page = nemi.forms.responses(formId, limit = 50, offset = 0)        // { form_id, total, responses }
 
@@ -278,9 +291,9 @@ Or, for a script that already holds an access token: `NemiClient("nemi_oat_...")
 | `client.folders` | `create` | `files.write` |
 | `client.gallery` | `photos` (Flow), `photosPage`, `photo`, `upload`, `setFavorite`, `albums`, `createAlbum`, `addToAlbum` | `gallery.read`, `gallery.write` |
 | `client.docs` | `list` (summaries with `preview`), `get`, `create`, `update` (replace or append), `delete` | `docs.read`, `docs.write` |
-| `client.sheets` | `list` (summaries), `get` (first tab with `rows`, `cols`, `cells`), `create`, `updateCells`, `delete` | `sheets.read`, `sheets.write` |
+| `client.sheets` | `list` (summaries), `get` (first tab with `rows`, `cols` and `cells` as `NemiCell(value, display)`), `create`, `updateCells`, `delete` | `sheets.read`, `sheets.write` |
 | `client.forms` | `list` (summaries with `published`), `get`, `responses` (paged, with `total`), `create`, `delete` | `forms.read`, `forms.write` |
-| `client.canvas` | `list`, `get` (optionally with strokes) | `canvas.read` |
+| `client.canvas` | `list`, `get` (optionally with strokes), `create`, `update` (title, or elements replacing the whole board), `delete` | `canvas.read`, `canvas.write` |
 | `client.calendar` | `calendars`, `events`, `create`, `update`, `delete` | `calendar.read`, `calendar.write` |
 
 Lists without a `workspaceId` span every workspace the person can read; creates without

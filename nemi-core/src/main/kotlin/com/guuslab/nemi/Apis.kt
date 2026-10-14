@@ -330,14 +330,14 @@ public class FormsApi internal constructor(private val client: NemiClient) {
     public suspend fun responses(id: String, limit: Int? = null, offset: Int? = null): NemiFormResponses =
         client.get("forms/${seg(id)}/responses", NemiFormResponses.serializer(), listOf("limit" to limit, "offset" to offset))
 
-    /** `POST /forms`. [items] are the questions, in the format the Nemi docs describe. */
+    /** `POST /forms`. [fields] are the questions, in the format the Nemi docs describe. */
     public suspend fun create(
         title: String,
         description: String? = null,
-        items: JsonArray? = null,
+        fields: JsonArray? = null,
         workspaceId: String? = null,
     ): NemiForm {
-        val body = client.jsonBody(CreateFormBody.serializer(), CreateFormBody(workspaceId, title, description, items))
+        val body = client.jsonBody(CreateFormBody.serializer(), CreateFormBody(workspaceId, title, description, fields))
         val raw = NemiJson.parseToJsonElement(client.execute("POST", "forms", emptyList(), body)).jsonObject
         return NemiJson.decodeFromJsonElement(NemiForm.serializer(), raw).copy(raw = raw)
     }
@@ -347,7 +347,7 @@ public class FormsApi internal constructor(private val client: NemiClient) {
     }
 }
 
-/** Canvas boards (`canvas.read`). */
+/** Canvas boards (`canvas.read`, `canvas.write`). */
 public class CanvasApi internal constructor(private val client: NemiClient) {
     /** `GET /canvas`: summaries (`{ canvases: [...] }`). */
     public suspend fun list(workspaceId: String? = null, limit: Int? = null): List<NemiCanvas> =
@@ -357,6 +357,26 @@ public class CanvasApi internal constructor(private val client: NemiClient) {
     public suspend fun get(id: String, strokes: Boolean = false): NemiCanvas {
         val raw = client.getObject("canvas/${seg(id)}", listOf("strokes" to if (strokes) true else null))
         return NemiJson.decodeFromJsonElement(NemiCanvas.serializer(), raw).copy(raw = raw)
+    }
+
+    /** `POST /canvas`: a new, empty board. Returns its summary. */
+    public suspend fun create(workspaceId: String? = null, title: String? = null): NemiCanvas =
+        client.send("POST", "canvas", CreateCanvasBody.serializer(), CreateCanvasBody(workspaceId, title), NemiCanvas.serializer())
+
+    /**
+     * `PATCH /canvas/{id}`. [elements] REPLACES every element on the board: read the board
+     * first, change the array and send it back whole. Returns the board.
+     */
+    public suspend fun update(id: String, title: String? = null, elements: JsonArray? = null): NemiCanvas {
+        require(title != null || elements != null) { "Pass a title, elements or both" }
+        val body = client.jsonBody(UpdateCanvasBody.serializer(), UpdateCanvasBody(title, elements))
+        val raw = NemiJson.parseToJsonElement(client.execute("PATCH", "canvas/${seg(id)}", emptyList(), body)).jsonObject
+        return NemiJson.decodeFromJsonElement(NemiCanvas.serializer(), raw).copy(raw = raw)
+    }
+
+    /** `DELETE /canvas/{id}`. Final. */
+    public suspend fun delete(id: String) {
+        client.delete("canvas/${seg(id)}")
     }
 }
 
