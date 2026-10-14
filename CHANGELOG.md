@@ -1,0 +1,31 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [0.1.0] - 2026-10-14
+
+### Added
+
+- `nemi-core` (Kotlin/JVM, usable on Android and on servers):
+  - `NemiOAuthClient`: PKCE S256, authorize URL builder, redirect parsing with state
+    and `iss` checks, code exchange, refresh with rotation, revoke, userinfo, discovery.
+  - `IdTokenVerifier`: ES256 signature check with `java.security` (JWK to `ECPublicKey`,
+    JOSE to DER), `iss`, `aud`, `azp`, `exp`, `iat`, `nonce` and `at_hash`, JWKS caching
+    with one refetch for an unknown `kid`.
+  - `NemiClient` for REST API v1 with suspend functions: `me`, `workspaces`, `files`
+    (list, search, get, download, three step upload, update, delete), `folders.create`,
+    `gallery` (paging `Flow`, photo, multipart upload, albums, favourites), `docs`,
+    `sheets`, `forms`, `canvas` and `calendar`.
+  - Typed errors `NemiApiException` (status, code, requiredScope) and `NemiOAuthException`.
+  - Automatic retry of 429 responses honoring `Retry-After` (at most 2 retries).
+  - `RefreshingTokenProvider` with single flight refresh and one retry after a 401.
+- `nemi-android` (minSdk 23):
+  - `NemiAuth`, the `SignInWithNemi` activity result contract and a manifest merged
+    `NemiRedirectActivity` configured with the `nemiRedirectScheme` placeholder.
+  - Custom Tabs, a distinct cancelled result, and sign in state that survives process death.
+  - `EncryptedTokenStore` backed by an Android Keystore AES-256-GCM key.
+  - Jetpack Compose `SignInWithNemiButton` and `rememberSignInWithNemi`.
+
+[0.1.0]: https://github.com/GuusLab/nemi-android/releases/tag/0.1.0

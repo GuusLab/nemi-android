@@ -1,0 +1,9 @@
+# JitPack builds every module and serves them as
+#   com.github.GuusLab:nemi-android:<tag>                  (all modules)
+#   com.github.GuusLab.nemi-android:nemi-core:<tag>        (one module)
+#   com.github.GuusLab.nemi-android:nemi-android:<tag>
+# Any JDK from 17 up works (openjdk17 or openjdk21).
+jdk:
+  - openjdk17
+install:
+  - ./gradlew --no-daemon publishToMavenLocal -x test

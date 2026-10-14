@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 11+ package visibility: find a browser that supports Custom Tabs. -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
+    <application>
+        <!-- Opens the Custom Tab and returns the redirect to the caller. Not exported. -->
+        <activity
+            android:name="com.guuslab.nemi.android.NemiAuthorizationActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Nemi.Invisible" />
+
+        <!--
+            Receives com.example.app:/oauth2redirect. The app sets the scheme with
+            manifestPlaceholders["nemiRedirectScheme"] = "com.example.app".
+        -->
+        <activity
+            android:name="com.guuslab.nemi.android.NemiRedirectActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Nemi.Invisible">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${nemiRedirectScheme}" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
