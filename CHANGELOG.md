@@ -15,9 +15,12 @@ All notable changes to this project are documented here. The format follows
     JOSE to DER), `iss`, `aud`, `azp`, `exp`, `iat`, `nonce` and `at_hash`, JWKS caching
     with one refetch for an unknown `kid`.
   - `NemiClient` for REST API v1 with suspend functions: `me`, `workspaces`, `files`
-    (list, search, get, download, three step upload, update, delete), `folders.create`,
-    `gallery` (paging `Flow`, photo, multipart upload, albums, favourites), `docs`,
-    `sheets`, `forms`, `canvas` and `calendar`.
+    (list, search, get, download, three step upload with the presigned headers, update,
+    delete), `folders.create`, `gallery` (paging `Flow`, photo, multipart upload, albums,
+    favourites), `docs` (replace or append), `sheets`, `forms` (paged responses),
+    `canvas` and `calendar` (calendars and events, with an optional calendar on create).
+  - Models match the v1 response shapes, including list wrappers, photo color and albums,
+    album covers and 204 deletes.
   - Typed errors `NemiApiException` (status, code, requiredScope) and `NemiOAuthException`.
   - Automatic retry of 429 responses honoring `Retry-After` (at most 2 retries).
   - `RefreshingTokenProvider` with single flight refresh and one retry after a 401.

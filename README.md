@@ -197,8 +197,42 @@ val full = nemi.gallery.photo(page.photos.first().id).url
 // Upload (gallery.write). JPEG, PNG, HEIC, WebP or AVIF, up to 50 MB.
 val uploaded = nemi.gallery.upload(workspaceId, file = File(path), mimeType = "image/jpeg")
 val album = nemi.gallery.createAlbum(workspaceId, "Summer")
-nemi.gallery.addToAlbum(album.id, listOf(uploaded.id))
-nemi.gallery.setFavorite(uploaded.id, true)
+val added = nemi.gallery.addToAlbum(album.id, listOf(uploaded.id))   // { album_id, added, skipped }
+nemi.gallery.setFavorite(uploaded.id, true)                           // returns the updated photo
+```
+
+Every `Photo` carries `workspaceId`, `color` (a placeholder while the thumbnail loads) and
+`thumbnailUrl`; `gallery.photo(id)` adds the full size `url` and the `albums` it is in.
+
+## Files, docs and calendar examples
+
+```kotlin
+// Upload: the SDK creates the upload, PUTs the bytes to the presigned URL with the
+// headers the server returned (never the bearer token) and completes it.
+val file = nemi.files.upload(workspaceId, File(path), type = "application/pdf")
+nemi.files.update(file.id, folderId = FilesApi.ROOT_FOLDER)            // move to the top level
+
+val folder = nemi.folders.create(workspaceId, "Taxes")               // { id, name, workspace_id, parent_id }
+
+val doc = nemi.docs.create("Trip plan", markdown = "# Day 1")
+nemi.docs.update(doc.id, markdown = "\n# Day 2", mode = DocUpdateMode.Append)
+
+val sheet = nemi.sheets.create("Budget", cells = mapOf("A1" to "Rent", "B1" to 950))
+nemi.sheets.updateCells(sheet.id, mapOf("A2" to "Food", "B2" to 300))   // { id, updated }
+
+val page = nemi.forms.responses(formId, limit = 50, offset = 0)        // { form_id, total, responses }
+
+val primary = nemi.calendar.calendars().first { it.primary }
+nemi.calendar.create(
+    NewCalendarEvent(
+        title = "Dinner",
+        start = "2026-11-01T18:00:00Z",
+        end = "2026-11-01T20:00:00Z",
+        // calendarId is optional: without it the event goes to the primary Nemi calendar.
+        calendarId = primary.id,
+        timezone = "Europe/Amsterdam",
+    ),
+)
 ```
 
 ## Server-side Kotlin
@@ -243,13 +277,17 @@ Or, for a script that already holds an access token: `NemiClient("nemi_oat_...")
 | `client.files` | `list`, `search`, `get`, `downloadLink`, `download`, `downloadTo`, `upload` (create, PUT, complete), `update`, `delete` | `files.read`, `files.write` |
 | `client.folders` | `create` | `files.write` |
 | `client.gallery` | `photos` (Flow), `photosPage`, `photo`, `upload`, `setFavorite`, `albums`, `createAlbum`, `addToAlbum` | `gallery.read`, `gallery.write` |
-| `client.docs` | `list`, `get`, `create`, `update`, `delete` | `docs.read`, `docs.write` |
-| `client.sheets` | `list`, `get`, `create`, `updateCells`, `delete` | `sheets.read`, `sheets.write` |
-| `client.forms` | `list`, `get`, `responses`, `create`, `delete` | `forms.read`, `forms.write` |
-| `client.canvas` | `list`, `get` | `canvas.read` |
-| `client.calendar` | `events`, `create`, `update`, `delete` | `calendar.read`, `calendar.write` |
+| `client.docs` | `list` (summaries with `preview`), `get`, `create`, `update` (replace or append), `delete` | `docs.read`, `docs.write` |
+| `client.sheets` | `list` (summaries), `get` (first tab with `rows`, `cols`, `cells`), `create`, `updateCells`, `delete` | `sheets.read`, `sheets.write` |
+| `client.forms` | `list` (summaries with `published`), `get`, `responses` (paged, with `total`), `create`, `delete` | `forms.read`, `forms.write` |
+| `client.canvas` | `list`, `get` (optionally with strokes) | `canvas.read` |
+| `client.calendar` | `calendars`, `events`, `create`, `update`, `delete` | `calendar.read`, `calendar.write` |
 
-Times are ISO 8601 UTC strings as the API sends them. Ids are opaque strings.
+Lists without a `workspaceId` span every workspace the person can read; creates without
+one go to the first workspace they can write in. Updates return the updated object,
+deletes answer 204. Form questions and canvas boards are free form: read them from
+`NemiForm.raw` and `NemiCanvas.raw`. Times are ISO 8601 UTC strings as the API sends them.
+Ids are opaque strings.
 
 ### Errors
 

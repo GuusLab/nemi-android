@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.Request
@@ -100,7 +101,13 @@ public class FilesApi internal constructor(private val client: NemiClient) {
         body: RequestBody,
     ): NemiFile {
         val ticket = createUpload(workspaceId, name, size, type, folderId)
-        val put = Request.Builder().url(ticket.uploadUrl).method(ticket.method.uppercase(), body).build()
+        if (ticket.maxSize > 0 && size > ticket.maxSize) {
+            throw NemiApiException(413, NemiApiException.TOO_LARGE, "The file is larger than ${ticket.maxSize} bytes")
+        }
+        // Presigned: send exactly the headers the server asked for, and never the bearer token.
+        val put = Request.Builder().url(ticket.uploadUrl).method(ticket.method.uppercase(), body)
+            .apply { ticket.headers.forEach { (key, value) -> header(key, value) } }
+            .build()
         client.httpClient.newCall(put).await().use { response ->
             if (!response.isSuccessful) {
                 throw NemiApiException(response.code, "upload_failed", "Uploading the bytes failed (HTTP ${response.code})")
@@ -109,9 +116,18 @@ public class FilesApi internal constructor(private val client: NemiClient) {
         return completeUpload(ticket.uploadId)
     }
 
-    /** `PATCH /files/{id}`: rename and/or move. */
-    public suspend fun update(id: String, name: String? = null, folderId: String? = null) {
-        client.sendUnit("PATCH", "files/${seg(id)}", UpdateFileBody.serializer(), UpdateFileBody(name, folderId))
+    /**
+     * `PATCH /files/{id}`: rename and/or move. Pass [ROOT_FOLDER] as [folderId] to move to
+     * the top level. Returns the updated file.
+     */
+    public suspend fun update(id: String, name: String? = null, folderId: String? = null): NemiFile {
+        require(name != null || folderId != null) { "Pass a name, a folderId or both" }
+        return client.send("PATCH", "files/${seg(id)}", UpdateFileBody.serializer(), UpdateFileBody(name, folderId), NemiFile.serializer())
+    }
+
+    public companion object {
+        /** `folder_id` value for the top level of a workspace. */
+        public const val ROOT_FOLDER: String = "root"
     }
 
     /** `DELETE /files/{id}`: moves to trash where the plan has one. */
@@ -202,38 +218,53 @@ public class GalleryApi internal constructor(private val client: NemiClient) {
         return client.decode(NemiPhoto.serializer(), client.execute("POST", "gallery/photos", emptyList(), multipart))
     }
 
-    /** `PATCH /gallery/photos/{id}`. */
-    public suspend fun setFavorite(id: String, favorite: Boolean) {
-        client.sendUnit("PATCH", "gallery/photos/${seg(id)}", FavoriteBody.serializer(), FavoriteBody(favorite))
-    }
+    /** `PATCH /gallery/photos/{id}`. Returns the updated photo. */
+    public suspend fun setFavorite(id: String, favorite: Boolean): NemiPhoto =
+        client.send("PATCH", "gallery/photos/${seg(id)}", FavoriteBody.serializer(), FavoriteBody(favorite), NemiPhoto.serializer())
 
     /** `GET /gallery/albums`. */
     public suspend fun albums(workspaceId: String? = null): List<NemiAlbum> =
         client.get("gallery/albums", AlbumsResponse.serializer(), listOf("workspace_id" to workspaceId)).albums
 
-    /** `POST /gallery/albums`. */
-    public suspend fun createAlbum(workspaceId: String, name: String): NemiAlbum =
+    /** `POST /gallery/albums`. Without [workspaceId], the person's first writable library. */
+    public suspend fun createAlbum(workspaceId: String?, name: String): NemiAlbum =
         client.send("POST", "gallery/albums", CreateAlbumBody.serializer(), CreateAlbumBody(workspaceId, name), NemiAlbum.serializer())
 
-    /** `POST /gallery/albums/{id}/photos`. */
-    public suspend fun addToAlbum(albumId: String, photoIds: List<String>) {
-        client.sendUnit("POST", "gallery/albums/${seg(albumId)}/photos", AddPhotosBody.serializer(), AddPhotosBody(photoIds))
-    }
+    /** `POST /gallery/albums/{id}/photos`. Photos from another library are skipped. */
+    public suspend fun addToAlbum(albumId: String, photoIds: List<String>): NemiAlbumAddResult =
+        client.send(
+            "POST",
+            "gallery/albums/${seg(albumId)}/photos",
+            AddPhotosBody.serializer(),
+            AddPhotosBody(photoIds),
+            NemiAlbumAddResult.serializer(),
+        )
 }
 
 /** Docs as Markdown (`docs.read`, `docs.write`). */
 public class DocsApi internal constructor(private val client: NemiClient) {
-    public suspend fun list(workspaceId: String? = null): List<NemiDoc> =
-        client.list("docs", "docs", NemiDoc.serializer(), listOf("workspace_id" to workspaceId))
+    /** `GET /docs`: summaries (with [NemiDoc.preview], without markdown). Without [workspaceId], every readable workspace. */
+    public suspend fun list(workspaceId: String? = null, limit: Int? = null): List<NemiDoc> =
+        client.list("docs", "docs", NemiDoc.serializer(), listOf("workspace_id" to workspaceId, "limit" to limit))
 
     public suspend fun get(id: String): NemiDoc = client.get("docs/${seg(id)}", NemiDoc.serializer())
 
     public suspend fun create(title: String, markdown: String? = null, workspaceId: String? = null): NemiDoc =
         client.send("POST", "docs", CreateDocBody.serializer(), CreateDocBody(workspaceId, title, markdown), NemiDoc.serializer())
 
-    public suspend fun update(id: String, title: String? = null, markdown: String? = null) {
-        client.sendUnit("PATCH", "docs/${seg(id)}", UpdateDocBody.serializer(), UpdateDocBody(title, markdown))
-    }
+    /** `PATCH /docs/{id}`. [mode] decides whether [markdown] replaces the body or is appended. */
+    public suspend fun update(
+        id: String,
+        title: String? = null,
+        markdown: String? = null,
+        mode: DocUpdateMode? = null,
+    ): NemiDoc = client.send(
+        "PATCH",
+        "docs/${seg(id)}",
+        UpdateDocBody.serializer(),
+        UpdateDocBody(title, markdown, mode),
+        NemiDoc.serializer(),
+    )
 
     public suspend fun delete(id: String) {
         client.delete("docs/${seg(id)}")
@@ -242,24 +273,33 @@ public class DocsApi internal constructor(private val client: NemiClient) {
 
 /** Sheets as cells (`sheets.read`, `sheets.write`). */
 public class SheetsApi internal constructor(private val client: NemiClient) {
-    public suspend fun list(workspaceId: String? = null): List<NemiSheet> =
-        client.list("sheets", "sheets", NemiSheet.serializer(), listOf("workspace_id" to workspaceId))
+    /** `GET /sheets`: summaries without cells. */
+    public suspend fun list(workspaceId: String? = null, limit: Int? = null): List<NemiSheet> =
+        client.list("sheets", "sheets", NemiSheet.serializer(), listOf("workspace_id" to workspaceId, "limit" to limit))
 
     public suspend fun get(id: String): NemiSheet = client.get("sheets/${seg(id)}", NemiSheet.serializer())
 
-    public suspend fun create(title: String, workspaceId: String? = null): NemiSheet =
-        client.send("POST", "sheets", CreateSheetBody.serializer(), CreateSheetBody(workspaceId, title), NemiSheet.serializer())
+    /** `POST /sheets`, optionally with initial [cells] (String, Number, Boolean, null or JsonElement values). */
+    public suspend fun create(title: String, workspaceId: String? = null, cells: Map<String, Any?>? = null): NemiSheet =
+        client.send(
+            "POST",
+            "sheets",
+            CreateSheetBody.serializer(),
+            CreateSheetBody(workspaceId, title, cells?.let(::toJsonCells)),
+            NemiSheet.serializer(),
+        )
 
     /** `PATCH /sheets/{id}/cells` with JSON values. */
-    public suspend fun updateCells(id: String, cells: Map<String, JsonElement>) {
-        client.sendUnit("PATCH", "sheets/${seg(id)}/cells", CellsBody.serializer(), CellsBody(cells))
-    }
+    public suspend fun updateCells(id: String, cells: Map<String, JsonElement>): NemiCellsUpdate =
+        client.send("PATCH", "sheets/${seg(id)}/cells", CellsBody.serializer(), CellsBody(cells), NemiCellsUpdate.serializer())
 
     /** Convenience overload: values may be String, Number, Boolean or null. */
     @JvmName("updateCellValues")
-    public suspend fun updateCells(id: String, cells: Map<String, Any?>) {
-        updateCells(id, cells.mapValues { (ref, value) -> cellValue(ref, value) })
-    }
+    public suspend fun updateCells(id: String, cells: Map<String, Any?>): NemiCellsUpdate =
+        updateCells(id, toJsonCells(cells))
+
+    private fun toJsonCells(cells: Map<String, Any?>): Map<String, JsonElement> =
+        cells.mapValues { (ref, value) -> cellValue(ref, value) }
 
     public suspend fun delete(id: String) {
         client.delete("sheets/${seg(id)}")
@@ -277,20 +317,30 @@ public class SheetsApi internal constructor(private val client: NemiClient) {
 
 /** Forms, their questions and their responses (`forms.read`, `forms.write`). */
 public class FormsApi internal constructor(private val client: NemiClient) {
-    public suspend fun list(workspaceId: String? = null): List<NemiForm> =
-        client.list("forms", "forms", NemiForm.serializer(), listOf("workspace_id" to workspaceId))
+    /** `GET /forms`: summaries. */
+    public suspend fun list(workspaceId: String? = null, limit: Int? = null): List<NemiForm> =
+        client.list("forms", "forms", NemiForm.serializer(), listOf("workspace_id" to workspaceId, "limit" to limit))
 
     public suspend fun get(id: String): NemiForm {
         val raw = client.getObject("forms/${seg(id)}")
         return NemiJson.decodeFromJsonElement(NemiForm.serializer(), raw).copy(raw = raw)
     }
 
-    /** `GET /forms/{id}/responses`, each response as JSON. */
-    public suspend fun responses(id: String): List<JsonObject> =
-        client.list("forms/${seg(id)}/responses", "responses", JsonObject.serializer())
+    /** `GET /forms/{id}/responses`: one page of responses (each as JSON) and the total count. */
+    public suspend fun responses(id: String, limit: Int? = null, offset: Int? = null): NemiFormResponses =
+        client.get("forms/${seg(id)}/responses", NemiFormResponses.serializer(), listOf("limit" to limit, "offset" to offset))
 
-    public suspend fun create(title: String, fields: JsonArray? = null, workspaceId: String? = null): NemiForm =
-        client.send("POST", "forms", CreateFormBody.serializer(), CreateFormBody(workspaceId, title, fields), NemiForm.serializer())
+    /** `POST /forms`. [items] are the questions, in the format the Nemi docs describe. */
+    public suspend fun create(
+        title: String,
+        description: String? = null,
+        items: JsonArray? = null,
+        workspaceId: String? = null,
+    ): NemiForm {
+        val body = client.jsonBody(CreateFormBody.serializer(), CreateFormBody(workspaceId, title, description, items))
+        val raw = NemiJson.parseToJsonElement(client.execute("POST", "forms", emptyList(), body)).jsonObject
+        return NemiJson.decodeFromJsonElement(NemiForm.serializer(), raw).copy(raw = raw)
+    }
 
     public suspend fun delete(id: String) {
         client.delete("forms/${seg(id)}")
@@ -299,27 +349,38 @@ public class FormsApi internal constructor(private val client: NemiClient) {
 
 /** Canvas boards (`canvas.read`). */
 public class CanvasApi internal constructor(private val client: NemiClient) {
-    public suspend fun list(workspaceId: String? = null): List<NemiCanvas> =
-        client.list("canvas", "canvas", NemiCanvas.serializer(), listOf("workspace_id" to workspaceId))
+    /** `GET /canvas`: summaries (`{ canvases: [...] }`). */
+    public suspend fun list(workspaceId: String? = null, limit: Int? = null): List<NemiCanvas> =
+        client.list("canvas", "canvases", NemiCanvas.serializer(), listOf("workspace_id" to workspaceId, "limit" to limit))
 
-    public suspend fun get(id: String): NemiCanvas {
-        val raw = client.getObject("canvas/${seg(id)}")
+    /** `GET /canvas/{id}`. Set [strokes] to include the freehand strokes in [NemiCanvas.raw]. */
+    public suspend fun get(id: String, strokes: Boolean = false): NemiCanvas {
+        val raw = client.getObject("canvas/${seg(id)}", listOf("strokes" to if (strokes) true else null))
         return NemiJson.decodeFromJsonElement(NemiCanvas.serializer(), raw).copy(raw = raw)
     }
 }
 
 /** Calendars made in Nemi only (`calendar.read`, `calendar.write`). Never synced Google or Outlook events. */
 public class CalendarApi internal constructor(private val client: NemiClient) {
-    /** `GET /calendar/events` between two ISO 8601 instants. */
-    public suspend fun events(start: String, end: String): List<NemiCalendarEvent> =
-        client.list("calendar/events", "events", NemiCalendarEvent.serializer(), listOf("start" to start, "end" to end))
+    /** `GET /calendar/calendars`: the person's Nemi calendars. */
+    public suspend fun calendars(): List<NemiCalendar> =
+        client.list("calendar/calendars", "calendars", NemiCalendar.serializer())
+
+    /** `GET /calendar/events` between two ISO 8601 instants, optionally in one calendar. */
+    public suspend fun events(start: String, end: String, calendarId: String? = null): List<NemiCalendarEvent> =
+        client.list(
+            "calendar/events",
+            "events",
+            NemiCalendarEvent.serializer(),
+            listOf("start" to start, "end" to end, "calendar_id" to calendarId),
+        )
 
     public suspend fun create(event: NewCalendarEvent): NemiCalendarEvent =
         client.send("POST", "calendar/events", NewCalendarEvent.serializer(), event, NemiCalendarEvent.serializer())
 
-    public suspend fun update(id: String, update: CalendarEventUpdate) {
-        client.sendUnit("PATCH", "calendar/events/${seg(id)}", CalendarEventUpdate.serializer(), update)
-    }
+    /** `PATCH /calendar/events/{id}`. Returns the updated event. */
+    public suspend fun update(id: String, update: CalendarEventUpdate): NemiCalendarEvent =
+        client.send("PATCH", "calendar/events/${seg(id)}", CalendarEventUpdate.serializer(), update, NemiCalendarEvent.serializer())
 
     public suspend fun delete(id: String) {
         client.delete("calendar/events/${seg(id)}")

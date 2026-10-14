@@ -72,10 +72,6 @@ public class NemiClient(
         serializer: KSerializer<T>,
     ): T = decode(serializer, execute(method, path, emptyList(), jsonBody(bodySerializer, body)))
 
-    internal suspend fun <B> sendUnit(method: String, path: String, bodySerializer: KSerializer<B>, body: B) {
-        execute(method, path, emptyList(), jsonBody(bodySerializer, body))
-    }
-
     internal suspend fun delete(path: String) {
         execute("DELETE", path, emptyList(), null)
     }
@@ -87,8 +83,8 @@ public class NemiClient(
         query: List<Pair<String, Any?>> = emptyList(),
     ): List<T> = decodeList(execute("GET", path, query, null), key, serializer)
 
-    internal suspend fun getObject(path: String): JsonObject =
-        NemiJson.parseToJsonElement(execute("GET", path, emptyList(), null)).jsonObject
+    internal suspend fun getObject(path: String, query: List<Pair<String, Any?>> = emptyList()): JsonObject =
+        NemiJson.parseToJsonElement(execute("GET", path, query, null)).jsonObject
 
     internal suspend fun execute(
         method: String,
@@ -163,8 +159,9 @@ public class NemiClient(
         }
 
         /**
-         * Lists come back as `{ "<key>": [...] }`. Accept a bare array or another wrapper key too,
-         * so a small server side change does not break apps in the field.
+         * Lists come back as `{ "<key>": [...] }` (`docs`, `sheets`, `forms`, `canvases`,
+         * `events`, `calendars`, `responses`). [key] is read first; a bare array or another
+         * wrapper key is accepted as a fallback so a small server change does not break apps.
          */
         fun <T> decodeList(text: String, key: String, serializer: KSerializer<T>): List<T> {
             val array = when (val element = NemiJson.parseToJsonElement(text)) {

@@ -128,7 +128,12 @@ class NemiClientTest {
     fun `upload runs the three steps`() = runTest {
         val uploadUrl = server.url("/bucket/put-here").toString()
         routes.on("POST /api/v1/files/uploads") {
-            json("""{"upload_id":"u1","upload_url":"$uploadUrl","method":"PUT","expires_at":"2026-01-01T00:15:00Z"}""")
+            json(
+                """{"upload_id":"u1","upload_url":"$uploadUrl","method":"PUT",
+                "headers":{"Content-Type":"text/plain","x-amz-meta-owner":"nemi"},"max_size":52428800,
+                "expires_at":"2026-01-01T00:15:00Z"}""",
+                201,
+            )
         }
         routes.on("PUT /bucket/put-here") { MockResponse().setResponseCode(200) }
         routes.on("POST /api/v1/files/uploads/u1/complete") {
@@ -147,6 +152,40 @@ class NemiClientTest {
         val put = server.takeRequestFor("PUT /bucket/put-here")
         assertEquals("hello", put.body.readUtf8())
         assertNull(put.getHeader("Authorization")) // the presigned URL never gets the token
+        assertEquals("nemi", put.getHeader("x-amz-meta-owner"))
+        assertTrue(put.getHeader("Content-Type")!!.startsWith("text/plain"))
+    }
+
+    @Test
+    fun `upload over max_size stops before the PUT`() = runTest {
+        routes.on("POST /api/v1/files/uploads") {
+            json("""{"upload_id":"u1","upload_url":"${server.url("/bucket/x")}","method":"PUT","headers":{},"max_size":3}""", 201)
+        }
+        val e = assertFailsWith<NemiApiException> { nemi.files.upload("w1", "big.bin", ByteArray(4)) }
+        assertEquals("too_large", e.code)
+        assertNull(routes.counts["PUT /bucket/x"])
+    }
+
+    @Test
+    fun `delete accepts 204 and update returns the file`() = runTest {
+        routes.on("DELETE /api/v1/files/x1") { MockResponse().setResponseCode(204) }
+        routes.on("DELETE /api/v1/docs/d1") { MockResponse().setResponseCode(204) }
+        routes.on("DELETE /api/v1/calendar/events/e1") { MockResponse().setResponseCode(204) }
+        routes.on("PATCH /api/v1/files/x1") { json("""{"id":"x1","name":"new.pdf","size":1,"type":null,"workspace_id":null,"folder_id":null,"created_at":null}""") }
+        nemi.files.delete("x1")
+        nemi.docs.delete("d1")
+        nemi.calendar.delete("e1")
+        val file = nemi.files.update("x1", folderId = FilesApi.ROOT_FOLDER)
+        assertEquals("new.pdf", file.name)
+        assertNull(file.workspaceId)
+        val patch = server.takeRequestFor("PATCH /api/v1/files/x1")
+        assertEquals("""{"folder_id":"root"}""", patch.body.readUtf8())
+    }
+
+    @Test
+    fun `folder create decodes the full answer`() = runTest {
+        routes.on("POST /api/v1/folders") { json("""{"id":"f2","name":"Taxes","workspace_id":"w1","parent_id":"f1"}""", 201) }
+        assertEquals(NemiFolder("f2", "Taxes", "w1", "f1"), nemi.folders.create("w1", "Taxes", parentId = "f1"))
     }
 
     @Test
@@ -163,7 +202,10 @@ class NemiClientTest {
     fun `gallery photos flow follows cursors`() = runTest {
         routes.on("GET /api/v1/gallery/photos") { request ->
             when (request.requestUrl!!.queryParameter("cursor")) {
-                null -> json("""{"photos":[{"id":"p1","width":10,"height":20,"size":3,"favorite":true,"thumbnail_url":"t1"}],"next_cursor":"c2"}""")
+                null -> json(
+                    """{"photos":[{"id":"p1","workspace_id":"w1","name":"a.jpg","width":10,"height":20,"size":3,
+                    "captured_at":"2026-01-01T00:00:00Z","favorite":true,"color":"#aabbcc","thumbnail_url":"t1"}],"next_cursor":"c2"}""",
+                )
                 "c2" -> json("""{"photos":[{"id":"p2"},{"id":"p3"}],"next_cursor":null}""")
                 else -> json("{}", 500)
             }
@@ -172,6 +214,8 @@ class NemiClientTest {
         assertEquals(listOf("p1", "p2", "p3"), photos.map { it.id })
         assertEquals(true, photos[0].favorite)
         assertEquals("t1", photos[0].thumbnailUrl)
+        assertEquals("#aabbcc", photos[0].color)
+        assertEquals("w1", photos[0].workspaceId)
         assertEquals("100", server.takeRequest().requestUrl!!.queryParameter("limit"))
     }
 
@@ -186,36 +230,112 @@ class NemiClientTest {
     }
 
     @Test
-    fun `albums docs sheets forms canvas calendar`() = runTest {
-        routes.on("GET /api/v1/gallery/albums") { json("""{"albums":[{"id":"a1","name":"Summer","count":3}]}""") }
-        routes.on("GET /api/v1/docs") { json("""{"docs":[{"id":"d1","title":"Plan","workspace_id":"w1","updated_at":"2026-01-01T00:00:00Z"}]}""") }
-        routes.on("GET /api/v1/docs/d1") { json("""{"id":"d1","title":"Plan","markdown":"# Hi","workspace_id":"w1","updated_at":"x"}""") }
-        routes.on("GET /api/v1/sheets/s1") { json("""{"id":"s1","title":"Budget","cells":{"A1":"Rent","B1":950,"C1":true,"D1":null}}""") }
-        routes.on("PATCH /api/v1/sheets/s1/cells") { json("{}") }
-        routes.on("GET /api/v1/forms/f1") { json("""{"id":"f1","title":"RSVP","fields":[{"type":"text"}],"closes_at":"x"}""") }
-        routes.on("GET /api/v1/forms/f1/responses") { json("""{"responses":[{"id":"r1"}]}""") }
-        routes.on("GET /api/v1/canvas") { json("""[{"id":"c1","title":"Board"}]""") }
-        routes.on("GET /api/v1/calendar/events") {
-            json("""{"events":[{"id":"e1","title":"Dinner","start":"2026-01-01T18:00:00Z","end":"2026-01-01T20:00:00Z","all_day":false}]}""")
+    fun `single photo, favorite and albums`() = runTest {
+        val photo = """{"id":"p1","workspace_id":"w1","name":"a.jpg","width":1,"height":1,"size":1,"favorite":true,
+            "color":"#000000","thumbnail_url":"t","url":"full","albums":[{"id":"a1","name":"Summer"}]}"""
+        routes.on("GET /api/v1/gallery/photos/p1") { json(photo) }
+        routes.on("PATCH /api/v1/gallery/photos/p1") { json(photo) }
+        routes.on("GET /api/v1/gallery/albums") { json("""{"albums":[{"id":"a1","name":"Summer","count":3,"cover_url":"c"}]}""") }
+        routes.on("POST /api/v1/gallery/albums") { json("""{"id":"a2","name":"Winter","count":0,"cover_url":null}""", 201) }
+        routes.on("POST /api/v1/gallery/albums/a1/photos") { json("""{"album_id":"a1","added":2,"skipped":1}""") }
+
+        val full = nemi.gallery.photo("p1")
+        assertEquals("full", full.url)
+        assertEquals(listOf(NemiAlbumRef("a1", "Summer")), full.albums)
+        assertEquals(true, nemi.gallery.setFavorite("p1", true).favorite)
+        val album = nemi.gallery.albums("w1").single()
+        assertEquals(3, album.count)
+        assertEquals("c", album.coverUrl)
+        assertNull(nemi.gallery.createAlbum(null, "Winter").coverUrl)
+        assertEquals(NemiAlbumAddResult("a1", 2, 1), nemi.gallery.addToAlbum("a1", listOf("p1", "p2", "p3")))
+
+        val create = server.takeRequestFor("POST /api/v1/gallery/albums")
+        assertEquals("""{"name":"Winter"}""", create.body.readUtf8())
+    }
+
+    @Test
+    fun `docs and sheets`() = runTest {
+        routes.on("GET /api/v1/docs") {
+            json("""{"docs":[{"id":"d1","title":"Plan","preview":"Hi there","workspace_id":"w1","updated_at":"2026-01-01T00:00:00Z"}]}""")
         }
-        routes.on("POST /api/v1/calendar/events") { json("""{"id":"e2","title":"Lunch","start":"s","end":"e","all_day":true}""") }
+        val doc = """{"id":"d1","title":"Plan","preview":"Hi","markdown":"# Hi","workspace_id":"w1","updated_at":"x"}"""
+        routes.on("GET /api/v1/docs/d1") { json(doc) }
+        routes.on("PATCH /api/v1/docs/d1") { json(doc) }
+        routes.on("POST /api/v1/docs") { json(doc, 201) }
+        routes.on("GET /api/v1/sheets") { json("""{"sheets":[{"id":"s1","title":"Budget","workspace_id":"w1","updated_at":"x"}]}""") }
+        val sheet = """{"id":"s1","title":"Budget","workspace_id":"w1","updated_at":"x","rows":100,"cols":26,
+            "cells":{"A1":"Rent","B1":950,"C1":true,"D1":null}}"""
+        routes.on("GET /api/v1/sheets/s1") { json(sheet) }
+        routes.on("POST /api/v1/sheets") { json(sheet, 201) }
+        routes.on("PATCH /api/v1/sheets/s1/cells") { json("""{"id":"s1","updated":3}""") }
 
-        assertEquals(3, nemi.gallery.albums("w1").single().count)
-        assertEquals("Plan", nemi.docs.list("w1").single().title)
+        val summary = nemi.docs.list("w1", limit = 5).single()
+        assertEquals("Hi there", summary.preview)
+        assertNull(summary.markdown)
         assertEquals("# Hi", nemi.docs.get("d1").markdown)
-        val sheet = nemi.sheets.get("s1")
-        assertEquals(JsonPrimitive(950), sheet.cells["B1"])
-        nemi.sheets.updateCells("s1", mapOf("A2" to "Food", "B2" to 300, "C2" to null))
-        val form = nemi.forms.get("f1")
-        assertEquals(1, form.fields!!.size)
-        assertEquals("x", form.raw["closes_at"]!!.jsonPrimitive.content)
-        assertEquals("r1", nemi.forms.responses("f1").single()["id"]!!.jsonPrimitive.content)
-        assertEquals("Board", nemi.canvas.list().single().title)
-        assertEquals("Dinner", nemi.calendar.events("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z").single().title)
-        assertEquals(true, nemi.calendar.create(NewCalendarEvent("Lunch", "s", "e", allDay = true)).allDay)
+        assertEquals("d1", nemi.docs.create("Plan", "# Hi").id)
+        assertEquals("Plan", nemi.docs.update("d1", markdown = "\nMore", mode = DocUpdateMode.Append).title)
 
-        val patch = server.takeRequestFor("PATCH /api/v1/sheets/s1/cells")
-        assertEquals("""{"cells":{"A2":"Food","B2":300,"C2":null}}""", patch.body.readUtf8())
+        assertEquals("Budget", nemi.sheets.list().single().title)
+        val full = nemi.sheets.get("s1")
+        assertEquals(26, full.cols)
+        assertEquals(JsonPrimitive(950), full.cells["B1"])
+        assertEquals(100, nemi.sheets.create("Budget", cells = mapOf("A1" to "Rent")).rows)
+        assertEquals(NemiCellsUpdate("s1", 3), nemi.sheets.updateCells("s1", mapOf("A2" to "Food", "B2" to 300, "C2" to null)))
+
+        assertEquals("""{"markdown":"\nMore","mode":"append"}""", server.takeRequestFor("PATCH /api/v1/docs/d1").body.readUtf8())
+        assertEquals("""{"title":"Budget","cells":{"A1":"Rent"}}""", server.takeRequestFor("POST /api/v1/sheets").body.readUtf8())
+        assertEquals(
+            """{"cells":{"A2":"Food","B2":300,"C2":null}}""",
+            server.takeRequestFor("PATCH /api/v1/sheets/s1/cells").body.readUtf8(),
+        )
+    }
+
+    @Test
+    fun `forms and canvas`() = runTest {
+        routes.on("GET /api/v1/forms") { json("""{"forms":[{"id":"f1","title":"RSVP","published":true,"workspace_id":"w1","updated_at":"x"}]}""") }
+        routes.on("GET /api/v1/forms/f1") { json("""{"id":"f1","title":"RSVP","published":true,"items":[{"type":"text"}]}""") }
+        routes.on("POST /api/v1/forms") { json("""{"id":"f2","title":"Poll","published":false,"items":[]}""", 201) }
+        routes.on("GET /api/v1/forms/f1/responses") { json("""{"form_id":"f1","total":42,"responses":[{"id":"r1"}]}""") }
+        routes.on("GET /api/v1/canvas") { json("""{"canvases":[{"id":"c1","title":"Board","workspace_id":"w1","updated_at":"x"}]}""") }
+        routes.on("GET /api/v1/canvas/c1") { json("""{"id":"c1","title":"Board","elements":[],"strokes":[]}""") }
+
+        assertEquals(true, nemi.forms.list().single().published)
+        val form = nemi.forms.get("f1")
+        assertEquals(1, (form.raw["items"] as kotlinx.serialization.json.JsonArray).size)
+        assertEquals("f2", nemi.forms.create("Poll", description = "Pick one").raw["id"]!!.jsonPrimitive.content)
+        val responses = nemi.forms.responses("f1", limit = 1, offset = 10)
+        assertEquals(42, responses.total)
+        assertEquals("r1", responses.responses.single()["id"]!!.jsonPrimitive.content)
+        assertEquals("Board", nemi.canvas.list().single().title)
+        assertTrue("strokes" in nemi.canvas.get("c1", strokes = true).raw)
+
+        val responsesUrl = server.takeRequestFor("GET /api/v1/forms/f1/responses").requestUrl!!
+        assertEquals("10", responsesUrl.queryParameter("offset"))
+        assertEquals("true", server.takeRequestFor("GET /api/v1/canvas/c1").requestUrl!!.queryParameter("strokes"))
+    }
+
+    @Test
+    fun `calendars and events`() = runTest {
+        routes.on("GET /api/v1/calendar/calendars") {
+            json("""{"calendars":[{"id":"cal1","name":"Personal","color":"#ff0000","timezone":"Europe/Amsterdam","primary":true}]}""")
+        }
+        val event = """{"id":"e1","calendar_id":"cal1","title":"Dinner","start":"2026-01-01T18:00:00Z","end":"2026-01-01T20:00:00Z",
+            "all_day":false,"location":null,"description":null,"timezone":"Europe/Amsterdam","rrule":"FREQ=WEEKLY"}"""
+        routes.on("GET /api/v1/calendar/events") { json("""{"events":[$event]}""") }
+        routes.on("POST /api/v1/calendar/events") { json(event, 201) }
+        routes.on("PATCH /api/v1/calendar/events/e1") { json(event) }
+
+        assertEquals(true, nemi.calendar.calendars().single().primary)
+        val listed = nemi.calendar.events("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z", calendarId = "cal1").single()
+        assertEquals("FREQ=WEEKLY", listed.rrule)
+        assertEquals("cal1", listed.calendarId)
+        assertEquals("e1", nemi.calendar.create(NewCalendarEvent("Dinner", "s", "e")).id)
+        assertEquals("Dinner", nemi.calendar.update("e1", CalendarEventUpdate(title = "Dinner")).title)
+
+        assertEquals("cal1", server.takeRequestFor("GET /api/v1/calendar/events").requestUrl!!.queryParameter("calendar_id"))
+        // No calendar_id: the server picks the primary calendar.
+        assertEquals("""{"title":"Dinner","start":"s","end":"e"}""", server.takeRequestFor("POST /api/v1/calendar/events").body.readUtf8())
     }
 
     @Test
